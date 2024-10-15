@@ -436,8 +436,14 @@ def CAN_comms(channel, bitrate, rawConfigFile, configVersion, configDeviceModel)
     ch = canlib.openChannel(channel, bitrate=bitrates[bitrate.upper()])
     ch.setBusOutputControl(canlib.canDRIVER_NORMAL)
 
-    ch.canSetAcceptanceFilter(CANRECEIVEID, 0x1FFFFFFF, is_extended=True)
-    ch.canSetAcceptanceFilter(0x000, 0x7FF, is_extended=False)
+    ch.canAccept(0x7FF, canlib.AcceptFilterFlag.SET_MASK_STD)
+    ch.canAccept(0x000, canlib.AcceptFilterFlag.SET_CODE_STD)
+    ch.canAccept(0x1FFFFFFF, canlib.AcceptFilterFlag.SET_MASK_EXT)
+    ch.canAccept(CANRECEIVEID, canlib.AcceptFilterFlag.SET_CODE_EXT)
+
+    # seems these function are not implemented in linux
+    # ch.canSetAcceptanceFilter(CANRECEIVEID, 0x1FFFFFFF, is_extended=True)
+    # ch.canSetAcceptanceFilter(0x000, 0x7FF, is_extended=False)
    
     ch.busOn()
     ch.iocontrol.flush_rx_buffer()
