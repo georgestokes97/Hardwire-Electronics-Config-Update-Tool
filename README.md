@@ -78,4 +78,4 @@ George Stokes -
 
 george@hardwire-electronics.co.uk
 
-[LinkedIn](www.linkedin.com/in/george-stokes-ba9b38116)
+<a class="reference external" href="www.linkedin.com/in/george-stokes-ba9b38116t">LinkedIn</a>
