@@ -1,3 +1,6 @@
+
+
+"""
 MIT License
 
 Copyright (c) 2024 George Stokes
@@ -19,3 +22,18 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+Title: List Kvaser devices.
+Author: George Stokes
+Date: 09/10/2024
+Description: List the avaiable Kvaser devices connected to this PC. 
+"""
+
+from canlib import canlib
+
+num_channels = canlib.getNumberOfChannels()
+print(f"Found {num_channels} channels")
+for ch in range(num_channels):
+    chd = canlib.ChannelData(ch)
+    print(f"{ch}. {chd.channel_name} ({chd.card_upc_no} / {chd.card_serial_no})")
