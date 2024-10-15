@@ -38,13 +38,13 @@ The CLI tool uses a Kvaser CAN to USB device to access the CAN Bus. If you have 
 ```
 In this case, channel 0 will be used. 
 
-To use the tool, you will need to create a hardwire config file in the Hardwire Electronics PDM configurator software in version 1.1.5 or later. You can save your configuration file and place it in the `hardwire-config-files` directory. <a class="reference external" href="[https://drive.google.com/drive/u/1/folders/1srP_ZftM7S_RWoWvo1MFG4b2HitNSpq7]">Hardwire Downloads</a>
+To use the tool, you will need to create a hardwire config file in the Hardwire Electronics PDM configurator software in version 1.1.5 or later. You can save your configuration file and place it in the `hardwire-config-files` directory. <a class="reference external" href="https://drive.google.com/drive/u/1/folders/1srP_ZftM7S_RWoWvo1MFG4b2HitNSpq7">Hardwire Downloads</a>
 
 You must make sure that the config file is made for the device you intend to send it to. 
 
 You must also make sure that the Hardwire device Firmware version and the configuration software version number is the same. 
 
-The tool uses an arbitrary CAN ID of 0x12E7B682 and 0x12E7B681 to send and receive data to/from the device. 
+The tool uses an arbitrary CAN ID of `0x12E7B682` and `0x12E7B681` to send and receive data to/from the device. 
 
 You can then run the CLI tool to update the Hardwire device configuration.
 
