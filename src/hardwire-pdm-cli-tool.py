@@ -109,7 +109,7 @@ def load_config_file(givenFileName):
     print(f'Config File Version:{configVersion}')
     print(f'Config File Device Model:{configDeviceModel}')
 
-    if(len(configDeviceModel) < 1):
+    if(int(configDeviceModel) < 1):
         print(string_format_fail('Invalid device model'))
 
     return rawSendData, configVersion, configDeviceModel
@@ -484,9 +484,11 @@ def main(argv=None):
     try:
         rawSendData, configVersion, configDeviceModel = load_config_file(args.filename)
     except:
+        print(string_format_fail('Error. Exiting'))
         return -1
 
     if(rawSendData == -1):
+        print(string_format_fail('Error. Invalid Config Data'))
         return -1
 
     # go on to CAN bus and attempt to start communication with the Hardwire Device. 
