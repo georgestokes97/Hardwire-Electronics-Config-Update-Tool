@@ -65,9 +65,40 @@ class MSG_TYPE(Enum):
     INFO = 1
     CONFIG_SEND_START = 2
     CONFIG_DATA = 3
+    CRC_QUERY = 4
+    CRC_RESPONSE = 5
+
+CRC_SECTION_COUNT = 18
+CRC_SECTION_LABELS = [
+    ("GL", "Global"),
+    ("PH", "PasswordHash"),
+    ("OP", "Outputs"),
+    ("IP", "Inputs"),
+    ("LG", "Logging"),
+    ("TI", "Timers"),
+    ("CT", "Counters"),
+    ("GF", "GenericFunctions"),
+    ("MC", "MathsChannels"),
+    ("SC", "SensorCalibrations"),
+    ("TD", "TwoDTables"),
+    ("CK", "CANKeypads"),
+    ("CF", "CANFilters"),
+    ("CI", "CANInputs"),
+    ("CO", "CANOutputs"),
+    ("CS", "CANStream"),
+    ("MP", "ModularPDM"),
+    ("LN", "LINBus"),
+]
 
 def string_format_fail(string):
     return bcolors.FAIL + string + bcolors.ENDC
+
+def get_crc_section_label(sectionIndex):
+    if(sectionIndex < 0 or sectionIndex >= len(CRC_SECTION_LABELS)):
+        return f'UNKNOWN[{sectionIndex}]'
+
+    code, name = CRC_SECTION_LABELS[sectionIndex]
+    return f'{code} ({name})'
 
 def load_config_file(givenFileName):
 
@@ -105,6 +136,11 @@ def load_config_file(givenFileName):
     
     configVersion = configfile["MetaData"]["ConfiguratorVersion"].replace(".", "")
     configDeviceModel = configfile["Global"]["deviceModelVersion"]
+    sectionCRCs = None
+
+    if("sectionCRCs" in configfile and "byIndex" in configfile["sectionCRCs"]):
+        if(isinstance(configfile["sectionCRCs"]["byIndex"], list)):
+            sectionCRCs = configfile["sectionCRCs"]["byIndex"]
 
     print(f'Config File Version:{configVersion}')
     print(f'Config File Device Model:{configDeviceModel}')
@@ -112,7 +148,7 @@ def load_config_file(givenFileName):
     if(int(configDeviceModel) < 1):
         print(string_format_fail('Invalid device model'))
 
-    return rawSendData, configVersion, configDeviceModel
+    return rawSendData, configVersion, configDeviceModel, sectionCRCs
 
 def print_channels(selectedChannel):
     print(' ')
@@ -157,6 +193,7 @@ def removeDuplicateInfoMessages(deviceResponses):
 
 def printDevice(deviceNumber, CANFrame):
     print(deviceNumber, end='  ')
+    print(CANFrame)
 
     # Data bytes 
     #   0       1       2       3       4       5       6       7
@@ -212,8 +249,10 @@ def chooseHardwireDevice(deviceList, configVersion, configDeviceModel):
         return -1
     
     if(returnDevice.data[5] != int(configDeviceModel)):
-        print(string_format_fail(f'Config File is made for device model: {returnDevice.data[5]}. You have selected device model: {configDeviceModel}'))
-        return -1
+        print(string_format_fail(f'Config file device model ({configDeviceModel}) does not match selected device model ({returnDevice.data[5]}).'))
+        continueWithMismatch = input('Continue anyway? y/n: ')
+        if(continueWithMismatch.upper() != 'Y'):
+            return -1
 
     return returnDevice
 
@@ -260,6 +299,139 @@ def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, 
     bar = fill * filledLength + '-' * (length - filledLength)
     return f'{prefix} |{bar}| {percent}% {suffix}'
     # Print New Line on Complete
+
+def query_device_config_crc_array(ch, CANFrame, sectionCount, timeoutMs=100):
+    crcArray = []
+    deviceIDData = [CANFrame.data[1], CANFrame.data[2], CANFrame.data[3], CANFrame.data[4]]
+
+    for sectionIndex in range(sectionCount):
+        frameSend = Frame(
+            id_=CANSENDID,
+            data=[
+                MSG_TYPE.CRC_QUERY.value,
+                deviceIDData[0],
+                deviceIDData[1],
+                deviceIDData[2],
+                deviceIDData[3],
+                sectionIndex,
+                0,
+                0
+            ],
+            dlc=8,
+            flags=canlib.MessageFlag.EXT
+        )
+
+        ch.iocontrol.flush_rx_buffer()
+        ch.write(frameSend)
+        ch.writeSync(timeoutMs)
+
+        try:
+            ch.readSyncSpecific(CANRECEIVEID, timeoutMs)
+            frameReceive = ch.readSpecificSkip(CANRECEIVEID)
+        except (canlib.canNoMsg, canlib.exceptions.CanTimeout):
+            return None
+
+        if(frameReceive.flags == canlib.MessageFlag.ERROR_FRAME):
+            return None
+
+        if(frameReceive.data[0] != MSG_TYPE.CRC_RESPONSE.value):
+            return None
+
+        if(frameReceive.data[1] != sectionIndex):
+            return None
+
+        crcValue = (
+            (frameReceive.data[2] << 24) |
+            (frameReceive.data[3] << 16) |
+            (frameReceive.data[4] << 8) |
+            (frameReceive.data[5] << 0)
+        )
+        crcArray.append(crcValue)
+
+    return crcArray
+
+def should_update_by_crc(ch, chosenDevice, fileSectionCRCs, crcCheckMode):
+    if(crcCheckMode == 'off'):
+        return True
+
+    if(fileSectionCRCs is None):
+        if(crcCheckMode == 'require'):
+            print(string_format_fail('CRC check required but config file has no sectionCRCs.byIndex'))
+            return None
+
+        print('Config file has no sectionCRCs.byIndex. Continuing with normal update flow.')
+        return True
+
+    if(len(fileSectionCRCs) != CRC_SECTION_COUNT):
+        if(crcCheckMode == 'require'):
+            print(string_format_fail(f'CRC check required but file CRC count is {len(fileSectionCRCs)}, expected {CRC_SECTION_COUNT}'))
+            return None
+
+        print(f'Unexpected file CRC count ({len(fileSectionCRCs)}). Continuing with normal update flow.')
+        return True
+
+    print('Querying device config CRCs...')
+    deviceCrcs = query_device_config_crc_array(ch, chosenDevice, CRC_SECTION_COUNT)
+    if(deviceCrcs is None):
+        if(crcCheckMode == 'require'):
+            print(string_format_fail('CRC check required but device did not return valid CRC responses'))
+            return None
+
+        print('CRC query unsupported or timed out on device. Continuing with normal update flow.')
+        return True
+
+    for idx in range(CRC_SECTION_COUNT):
+        if(int(fileSectionCRCs[idx]) != int(deviceCrcs[idx])):
+            print(f'CRC mismatch at section {idx} {get_crc_section_label(idx)}: file={int(fileSectionCRCs[idx])}, device={int(deviceCrcs[idx])}')
+            return True
+
+    print(bcolors.OKGREEN + 'Config CRCs match device. Skipping update.' + bcolors.ENDC)
+    return False
+
+def verify_updated_crc(ch, chosenDevice, fileSectionCRCs, crcCheckMode):
+    if(fileSectionCRCs is None):
+        if(crcCheckMode == 'require'):
+            print(string_format_fail('Post-update CRC verification required but config file has no sectionCRCs.byIndex'))
+            return False
+        print('Post-update CRC verification skipped (no sectionCRCs.byIndex in file).')
+        return True
+
+    if(len(fileSectionCRCs) != CRC_SECTION_COUNT):
+        if(crcCheckMode == 'require'):
+            print(string_format_fail(f'Post-update CRC verification required but file CRC count is {len(fileSectionCRCs)}, expected {CRC_SECTION_COUNT}'))
+            return False
+        print(f'Post-update CRC verification skipped (unexpected file CRC count: {len(fileSectionCRCs)}).')
+        return True
+
+    print('Waiting 20 seconds before post-update CRC verification...')
+    time.sleep(20)
+    print('Re-querying device CRCs to verify update...')
+    for attempt in range(1, 6):
+        deviceCrcs = query_device_config_crc_array(ch, chosenDevice, CRC_SECTION_COUNT)
+        if(deviceCrcs is not None):
+            crcMismatch = False
+            mismatchIndex = -1
+            for idx in range(CRC_SECTION_COUNT):
+                if(int(fileSectionCRCs[idx]) != int(deviceCrcs[idx])):
+                    crcMismatch = True
+                    mismatchIndex = idx
+                    break
+
+            if(crcMismatch == False):
+                print(bcolors.OKGREEN + 'Post-update CRC verification passed.' + bcolors.ENDC)
+                return True
+
+            print(f'Post-update CRC mismatch at section {mismatchIndex} {get_crc_section_label(mismatchIndex)}: file={int(fileSectionCRCs[mismatchIndex])}, device={int(deviceCrcs[mismatchIndex])}')
+
+        if(attempt < 5):
+            time.sleep(0.2)
+
+    if(crcCheckMode == 'require'):
+        print(string_format_fail('Post-update CRC verification failed.'))
+        return False
+
+    print(string_format_fail('Post-update CRC verification could not be confirmed.'))
+    return True
 
 def updateHardwireDeviceConfig(ch, CANFrame, rawConfigFile):
     deviceModel = CANFrame.data[5]
@@ -425,7 +597,7 @@ def getInitialDeviceResponses(ch):
 
     return deviceResponses
 
-def CAN_comms(channel, bitrate, rawConfigFile, configVersion, configDeviceModel):
+def CAN_comms(channel, bitrate, rawConfigFile, configVersion, configDeviceModel, sectionCRCs, crcCheckMode):
 
     print('')
     print('Attempting to start CAN communication')
@@ -462,7 +634,21 @@ def CAN_comms(channel, bitrate, rawConfigFile, configVersion, configDeviceModel)
     if(chosenDevice == -1):
         return -1
     
-    updateHardwireDeviceConfig(ch, chosenDevice, rawConfigFile)
+    shouldUpdate = should_update_by_crc(ch, chosenDevice, sectionCRCs, crcCheckMode)
+    if(shouldUpdate is None):
+        return -1
+
+    if(shouldUpdate == False):
+        print(bcolors.OKGREEN + 'No update required' + bcolors.ENDC)
+        return 0
+
+    updateResult = updateHardwireDeviceConfig(ch, chosenDevice, rawConfigFile)
+    if(updateResult == -1):
+        return -1
+
+    if(crcCheckMode != 'off'):
+        if(verify_updated_crc(ch, chosenDevice, sectionCRCs, crcCheckMode) == False):
+            return -1
 
     print(bcolors.OKGREEN + 'Update completed' + bcolors.ENDC)
 
@@ -473,6 +659,7 @@ def main(argv=None):
     parser.add_argument('--channel', '-c',  type=int,   default=0,      help= ("Channel, Which channel the Kvaser CAN device is on"))
     parser.add_argument('--bitrate', '-b',  type=str ,  default='250k', help=("Bitrate, one of " + ', '.join(bitrates.keys())))
     parser.add_argument('--filename', '-f', type=str, default='',      help=("config file name e.g ./hardwire-config-files/testp-config.HWPDM"))
+    parser.add_argument('--crc-check', type=str, default='auto', choices=['auto', 'off', 'require'], help=("CRC compare mode: auto, off, require"))
  
     args = parser.parse_args(argv)
 
@@ -482,7 +669,7 @@ def main(argv=None):
 
     # load in HWPDM config file
     try:
-        rawSendData, configVersion, configDeviceModel = load_config_file(args.filename)
+        rawSendData, configVersion, configDeviceModel, sectionCRCs = load_config_file(args.filename)
     except:
         print(string_format_fail('Error. Exiting'))
         return -1
@@ -492,7 +679,7 @@ def main(argv=None):
         return -1
 
     # go on to CAN bus and attempt to start communication with the Hardwire Device. 
-    if(CAN_comms(args.channel, args.bitrate, rawSendData, configVersion, configDeviceModel) == -1):
+    if(CAN_comms(args.channel, args.bitrate, rawSendData, configVersion, configDeviceModel, sectionCRCs, args.crc_check) == -1):
         return -1
 
 if __name__ == '__main__':
